@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime
 
 from pyrogram import idle
 from pyrogram.errors import FloodWait
@@ -17,16 +18,51 @@ SESSION_CHECK_TIMEOUT = 30
 SESSION_FAIL_THRESHOLD = 3
 
 
+def _handler_count(client) -> int:
+    groups = getattr(getattr(client, "dispatcher", None), "groups", None) or {}
+    return sum(len(items) for items in groups.values())
+
+
+def _dispatcher_alive(client) -> bool:
+    if client is None:
+        return True
+    tasks = getattr(getattr(client, "dispatcher", None), "handler_worker_tasks", None) or []
+    return bool(tasks) and not all(task.done() for task in tasks)
+
+
+def _reset_dispatcher_workers(client) -> None:
+    """stop(clear_handlers=False) 会留下已结束的 worker/lock，start() 只会往列表里追加。"""
+    dispatcher = getattr(client, "dispatcher", None)
+    if dispatcher is None:
+        return
+    dispatcher.handler_worker_tasks.clear()
+    dispatcher.locks_list.clear()
+
+
+async def _reconnect(client, name: str) -> bool:
+    try:
+        await client.stop(clear_handlers=False)
+    except Exception:
+        logging.debug("停止%s失败", name, exc_info=True)
+    _reset_dispatcher_workers(client)
+    await client.start()
+    empty = _handler_count(client) == 0
+    if empty:
+        logging.error("重连后%s处理器为空", name)
+    return empty
+
+
 async def restart_clients():
     logging.warning("Telegram 会话疑似假死，正在重启连接，进程和下载队列保持不动...")
-    await app.stop()
-    await app.start()
+    # 默认 stop() 会清空处理器；重连后 get_me 仍成功，但消息再也不会进业务回调
+    bot_empty = await _reconnect(app, "机器人")
+    if bot_empty:
+        logging.error("机器人命令处理器丢失，本次无法自动补注册，需要重启进程")
     if user:
-        try:
-            await user.stop()
-        except Exception:
-            logging.debug("停止用户客户端失败", exc_info=True)
-        await user.start()
+        user_empty = await _reconnect(user, "用户账号")
+        if user_empty:
+            logging.warning("重连后用户账号处理器为空，重新注册频道监听")
+            listener.register_user_channel_handler(user)
     logging.info("Telegram 连接已恢复，下载任务会自动续传")
 
 
@@ -39,6 +75,14 @@ async def session_monitor():
             if user:
                 # 用户账号承担收帖和下载，会话假死同样要发现并重启
                 await asyncio.wait_for(user.get_me(), timeout=SESSION_CHECK_TIMEOUT)
+            if not _dispatcher_alive(app) or not _dispatcher_alive(user):
+                raise RuntimeError("消息分发任务已退出")
+            # 连接仍通时刷新入站时间，避免 Pyrogram 每 15 分钟对所有监听频道
+            # 跑 GetChannelDifference，把会话堵死后再误判假死。
+            now = datetime.now()
+            app.last_update_time = now
+            if user:
+                user.last_update_time = now
             failures = 0
             # 连接正常就唤醒冷驻留任务，自动重试轮次用尽后保留断点等在这里
             try:
@@ -53,7 +97,12 @@ async def session_monitor():
             raise
         except Exception:
             failures += 1
-            logging.warning("会话健康检查失败（%d/%d）", failures, SESSION_FAIL_THRESHOLD)
+            logging.warning(
+                "会话健康检查失败（%d/%d）",
+                failures,
+                SESSION_FAIL_THRESHOLD,
+                exc_info=True,
+            )
         if failures >= SESSION_FAIL_THRESHOLD:
             try:
                 await restart_clients()
