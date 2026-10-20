@@ -1,12 +1,9 @@
-name: Publish Docker image
+name: Publish GHCR image
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, codex/download-comment-media]
   workflow_dispatch:
-
-env:
-  IMAGE_NAME: tg-bot-dl
 
 jobs:
   detect:
@@ -42,6 +39,9 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             SHOULD_BUILD=true
             echo "手动触发，构建当前版本 $VERSION"
+          elif [ "$GITHUB_REF_NAME" = "codex/download-comment-media" ]; then
+            SHOULD_BUILD=true
+            echo "构建评论与范围下载功能分支 $VERSION"
           elif [ "$(git rev-list --count HEAD)" -lt 2 ]; then
             echo "历史提交不足，跳过发版"
           else
@@ -88,11 +88,9 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Normalize image name
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -105,12 +103,11 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
-            ghcr.io/${{ github.repository }}
+          images: ${{ steps.image.outputs.name }}
           tags: |
             type=raw,value=latest
             type=raw,value=${{ needs.detect.outputs.version }}
+            type=sha,format=long
           labels: |
             org.opencontainers.image.version=${{ needs.detect.outputs.version }}
 

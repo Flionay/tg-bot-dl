@@ -1,7 +1,7 @@
 <p align="center">
   <a href="https://github.com/kuke2733/tg-bot-dl"><img src="https://img.shields.io/badge/GitHub-kuke2733%2Ftg--bot--dl-181717?logo=github&logoColor=white" alt="GitHub"></a>
   &nbsp;
-  <a href="https://hub.docker.com/r/guyongbo/tg-bot-dl"><img src="https://img.shields.io/badge/DockerHub-guyongbo%2Ftg--bot--dl-2496ED?logo=docker&logoColor=white" alt="Docker Hub"></a>
+  <a href="https://github.com/Flionay/tg-bot-dl/pkgs/container/tg-bot-dl"><img src="https://img.shields.io/badge/GHCR-flionay%2Ftg--bot--dl-2496ED?logo=docker&logoColor=white" alt="GHCR"></a>
 </p>
 
 基于 Pyrogram MTProto 框架的 **Telegram 文件下载机器人**。不用挂着 Telegram 客户端，也不用敲命令行，把链接或文件发给机器人，就会下载到你的服务器或本地，单文件最大 **4GB**。
@@ -71,7 +71,7 @@ python start.py
 ```yaml
 services:
   tg-bot-dl:
-    image: guyongbo/tg-bot-dl:latest
+    image: ghcr.io/flionay/tg-bot-dl:latest
     container_name: tg-bot-dl
     restart: unless-stopped
     ports:
@@ -93,7 +93,11 @@ docker compose up -d
 
 浏览器打开 http://127.0.0.1:8080 填写配置。下载文件在 `./data`，登录会话和面板配置在 `./config`，日志在 `./config/logs`。容器里代理填 `127.0.0.1` 会自动改写成宿主机地址 `host.docker.internal`。
 
-也可以用 GitHub Container Registry 的镜像：`ghcr.io/kuke2733/tg-bot-dl:latest`。
+本分支的镜像发布在 GitHub Container Registry：`ghcr.io/flionay/tg-bot-dl:latest`，支持 `linux/amd64` 和 `linux/arm64`。固定版本可使用 `ghcr.io/flionay/tg-bot-dl:1.2.0`。
+
+首次发布后，仓库拥有者需在 GitHub 个人主页的 Packages 中找到 `tg-bot-dl`，进入 Package settings，将可见性改为 Public，NAS 才能免登录拉取。更新已有部署时，保留原有 `data`、`config` 卷挂载，执行 `docker compose pull && docker compose up -d`。
+
+发布流程只使用 GitHub Actions 自动提供的 `GITHUB_TOKEN`，不需要 Docker Hub 账号、Docker Hub Token 或手工创建的 GitHub Token。当前功能分支推送会自动构建；`main/master` 保留版本号变化触发构建与 Release 的规则，也可在 Actions 的 **Publish GHCR image** 中选择分支手动运行。每次发布提供 `latest`、版本号和完整提交 SHA 标签。
 
 ---
 

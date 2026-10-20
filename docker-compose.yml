@@ -1,6 +1,6 @@
 services:
   tg-bot-dl:
-    image: guyongbo/tg-bot-dl:latest
+    image: ghcr.io/flionay/tg-bot-dl:latest
     container_name: tg-bot-dl
     restart: unless-stopped
     ports:
