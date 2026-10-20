@@ -70,6 +70,12 @@ flowchart TB
 
 接入层是双账号分工：机器人只管交互，另有吞帖器防止频道帖被误当私聊文件；媒体一律由用户账号走 MTProto 下载。业务模块提供命令、监听过滤、文件管理和自愈，notify 负责把版本更新和磁盘满通知发给管理员。下载引擎由可靠性驻留和持久化支撑兜底——断点和任务记录在任何自动中断下都保留，连接恢复后自动唤醒续传；成品落在 `data/`，任务和配置落在 `config/`。
 
+评论区下载入口为 `/comments`（`bot/commands.py`），由 `bot/comments.py` 将频道原帖解析为讨论根消息并遍历该线程的回复，过滤出有 `file_id` 的图片和视频，再由 `handler.addCommentsFromLink` 建立独立批次，复用现有下载引擎。该功能不扫描整个讨论组，也不监听新评论。回归测试位于 `tests/test_comments.py`。
+
+范围下载入口为 `/range`（`bot/commands.py`），`bot/message_range.py` 解析会话并以 100 个编号为一批读取包含两端的消息范围，`handler.addRangeFromLinks` 将可下载媒体加入独立批次。范围不会扩展到区间以外的相册附件，也不递归下载评论。测试位于 `tests/test_message_range.py` 及 `tests/test_comments.py`。
+
+下载任务使用独立于 Telegram 消息编号的、JavaScript 安全整数范围内的任务 ID，避免跨频道相同消息编号冲突；`queue.json` 分别保存原始 `message_id` 和内部 `task_id`，兼容旧队列记录。批次在构建期间标记 `building`，以免快速完成的文件触发提前收尾。网页契约和持久化回归测试在 `tests/test_queue_integration.py`，浏览器测试在 `tests/test_queue_ui.cjs`。
+
 ## 目录总览
 
 ```text

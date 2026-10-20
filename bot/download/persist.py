@@ -92,14 +92,16 @@ def task_record(download: Download) -> dict:
     chat_id = None
     if download.from_message is not None and download.from_message.chat is not None:
         chat_id = download.from_message.chat.id
+    message_id = download.from_message.id if download.from_message is not None else download.id
     old_progress = None
     progress = download.progress_message
     if progress is not None and progress.chat is not None:
         old_progress = {"chat_id": progress.chat.id, "message_id": progress.id}
     return {
-        "key": f"{chat_id}:{download.id}",
+        "key": f"{chat_id}:{message_id}",
         "chat_id": chat_id,
-        "message_id": download.id,
+        "message_id": message_id,
+        "task_id": download.id,
         "client": "user" if download.client is user else "app",
         "filename": download.filename,
         "expected_size": download.expected_size or 0,

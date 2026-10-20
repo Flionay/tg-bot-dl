@@ -1326,6 +1326,7 @@
         return "驻留中";
       }
       if (paused || item.phase === "paused") return "已暂停";
+      if (item.building) return "正在加入队列";
       if (item.phase === "downloading") return "下载中";
       if (item.phase === "queued") return "排队中";
       return item.phase || "";
@@ -1394,9 +1395,10 @@
         const subEl = el.querySelector(".queue-item-sub");
         const title = item.kind === "batch" ? ("📁 " + item.name) : item.name;
         const pct = item.total > 0 ? Math.min(100, (item.received / item.total) * 100) : 0;
-        const sizeText = item.total
+        let sizeText = item.total
           ? (formatSize(item.received) + " / " + formatSize(item.total) + " · " + pct.toFixed(1) + "%")
           : (item.received ? ("已下载 " + formatSize(item.received)) : "等待开始");
+        if (item.kind === "batch" && item.total) sizeText = "当前传输 " + sizeText;
         const speedText = (!paused && item.speed > 0) ? (formatSize(item.speed) + "/s") : "";
         const etaText = (!paused && item.eta != null && item.eta >= 0) ? ("还需 " + formatEta(item.eta)) : "";
         const batchText = item.kind === "batch"

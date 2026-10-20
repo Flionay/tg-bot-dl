@@ -1,0 +1,15 @@
+services:
+  tg-bot-dl:
+    build: .
+    image: tg-bot-dl:comments
+    container_name: tg-bot-dl
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+      - ./config:/config
+    environment:
+      TZ: Asia/Shanghai
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

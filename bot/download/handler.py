@@ -3,16 +3,19 @@ from __future__ import annotations
 import logging
 import os
 import time
+from uuid import uuid4
 
 from pyrogram.enums.parse_mode import ParseMode
 from pyrogram.types import InlineKeyboardMarkup, Message, ReplyParameters
 
 from bot import folder
 from bot.app import BASE_FOLDER, app, user
+from bot.comments import collect_comment_media
+from bot.message_range import RangeInputError, collect_range_media
 from bot.download.groups import MediaGroupCollector
 from bot.download import persist as queue_persist
 from bot.download import state
-from bot.download.batches import refresh_batch
+from bot.download.batches import finish_batch_item, refresh_batch
 from bot.download.dedup import (
     UNIQUE_DUP_TEXT,
     mark_batch_unique_duplicate,
@@ -43,7 +46,7 @@ from bot.download.names import (
     unique_folder,
     with_media_extension,
 )
-from bot.download.types import Batch, BatchItem, Download
+from bot.download.types import Batch, BatchItem, Download, allocate_download_id
 from bot.util import humanReadableSize
 
 
@@ -193,7 +196,7 @@ def _make_download(
 ) -> Download:
     return Download(
         client=client,
-        id=message.id,
+        id=batch_item.download_id if batch_item else allocate_download_id(),
         filename=rel,
         from_message=message,
         progress_message=progress,
@@ -231,8 +234,14 @@ async def enqueue_file(
     rel = f"{rel_dir}/{filename}" if rel_dir and rel_dir != "." else filename
     real_file = os.path.join(directory, filename)
     target = reply_to or message
-    if any(item.id == message.id or item.filename == rel for item in downloads):
+    existing = list(downloads) + list(state.active_downloads) + [d for d, _ in state.iter_holds()]
+    if any(
+        (_chat_id(item.from_message) == _chat_id(message) and item.from_message.id == message.id)
+        or item.filename == rel for item in existing
+    ):
         logging.debug("跳过重复任务：%s %s", message.id, rel)
+        if batch is not None:
+            batch.items.append(BatchItem(download_id=allocate_download_id(), name=filename, status="skipped"))
         if batch is None:
             if quiet:
                 emit_download_event("skipped", {"filename": rel, "reason": "已在下载队列", "quiet": True, "chat_id": _chat_id(message)})
@@ -244,7 +253,7 @@ async def enqueue_file(
     unique_id = media_file_unique_id(message)
     batch_item = None
     if batch is not None:
-        batch_item = BatchItem(download_id=message.id, name=filename, status="waiting")
+        batch_item = BatchItem(download_id=allocate_download_id(), name=filename, status="waiting")
         batch.items.append(batch_item)
 
     if is_unique_duplicate(unique_id):
@@ -314,6 +323,8 @@ async def enqueue_messages(
     base: str | None = None,
     quiet: bool = False,
     notice_chat_id: int | None = None,
+    force_batch: bool = False,
+    batch_id: str | None = None,
 ) -> None:
     messages = [message for message in messages if message and message.media]
     if not messages:
@@ -322,7 +333,7 @@ async def enqueue_messages(
         return
     if not override:
         override = take_pending_rename(_chat_id(reply_to or messages[0]))
-    if len(messages) == 1:
+    if len(messages) == 1 and not force_batch:
         await enqueue_file(
             messages[0],
             client,
@@ -358,31 +369,156 @@ async def enqueue_messages(
         logging.warning("相册状态消息发送失败，仍继续入队：%s", subfolder)
 
     batch = Batch(
-        id=str(getattr(messages[0], "media_group_id", messages[0].id)),
+        id=batch_id or str(getattr(messages[0], "media_group_id", messages[0].id)),
         folder=subfolder,
         total=len(messages),
         message=status,
         directory=os.path.join(base_dir, subfolder),
         quiet=quiet,
+        building=True,
     )
     active_batches[batch.id] = batch
     queue_persist.add_batch(queue_persist.batch_record(batch))
 
     used_names: set[str] = set()
-    for message in messages:
-        await enqueue_file(
-            message,
-            client,
-            reply_to=reply_to or message,
-            subfolder=subfolder,
-            use_caption_name=False,
-            used_names=used_names,
-            batch=batch,
-            base=base,
-            quiet=quiet,
-            notice_chat_id=notice_chat_id,
+    try:
+        for message in messages:
+            if batch.stopped:
+                break
+            await enqueue_file(
+                message,
+                client,
+                reply_to=reply_to or message,
+                subfolder=subfolder,
+                use_caption_name=False,
+                used_names=used_names,
+                batch=batch,
+                base=base,
+                quiet=quiet,
+                notice_chat_id=notice_chat_id,
+            )
+    finally:
+        batch.building = False
+    await finish_batch_item(batch)
+
+
+_comment_scans: set[tuple[int | str, int]] = set()
+_range_scanning = False
+
+
+async def addRangeFromLinks(
+    link_message: Message, start: tuple[int | str, int], end: tuple[int | str, int],
+    *, folder_name: str | None = None,
+) -> None:
+    global _range_scanning
+    if _range_scanning:
+        await safe_reply(link_message, "已有范围扫描正在进行，请完成后再提交。")
+        return
+    _range_scanning = True
+    notice = None
+    try:
+        notice = await _status_message(link_message, "正在读取消息范围，包含起止消息…")
+        last_progress = time.monotonic()
+
+        async def on_progress(result):
+            nonlocal last_progress
+            now = time.monotonic()
+            if now - last_progress < 5:
+                return
+            last_progress = now
+            await _status_message(
+                link_message,
+                f"已扫描 {result.scanned}/{result.total} 个消息编号，"
+                f"找到 {len(result.messages)} 个可下载文件；扫描完成后加入队列。",
+                notice,
+            )
+
+        result = await collect_range_media(user, start, end, on_progress=on_progress)
+        if not result.messages:
+            await _status_message(
+                link_message,
+                f"已扫描 {result.total} 个消息编号，没有找到可下载文件。文字、已删除消息和非文件媒体已跳过。",
+                notice,
+            )
+            return
+        await enqueue_messages(
+            result.messages, user, reply_to=link_message,
+            override=folder_name or f"范围_{result.chat_id}_{result.start_id}-{result.end_id}",
+            notice=notice, force_batch=True, batch_id=f"range:{uuid4().hex}",
         )
-    await refresh_batch(batch, force=True)
+        logging.info(
+            "范围扫描完成 chat=%s start=%d end=%d files=%d",
+            result.chat_id, result.start_id, result.end_id, len(result.messages),
+        )
+    except RangeInputError as exc:
+        await _status_message(link_message, str(exc), notice)
+    except Exception as exc:
+        logging.exception("范围任务失败 start=%s end=%s", start, end)
+        await _status_message(
+            link_message,
+            f"范围任务未完成（{type(exc).__name__}）。请检查用户账号的频道或群组访问权限、"
+            "代理连接及运行日志。扫描失败时不会把部分结果加入队列。",
+            notice,
+        )
+    finally:
+        _range_scanning = False
+
+
+async def addCommentsFromLink(
+    link_message: Message, chat: int | str, message_id: int,
+    *, folder_name: str | None = None,
+) -> None:
+    key = (chat, message_id)
+    if key in _comment_scans:
+        await safe_reply(link_message, "这条帖子的评论正在扫描，请稍候。")
+        return
+    if _comment_scans:
+        await safe_reply(link_message, "已有评论扫描正在进行，请完成后再提交，避免触发限流。")
+        return
+    _comment_scans.add(key)
+    notice = None
+    try:
+        notice = await _status_message(link_message, "正在扫描已有评论中的图片和视频…")
+        last_progress = time.monotonic()
+
+        async def on_progress(result):
+            nonlocal last_progress
+            now = time.monotonic()
+            if now - last_progress < 5:
+                return
+            last_progress = now
+            await _status_message(
+                link_message,
+                f"已扫描 {result.scanned} 条评论，找到 {result.photos} 张图片、"
+                f"{result.videos} 个视频；扫描完成后加入队列。",
+                notice,
+            )
+
+        result = await collect_comment_media(user, chat, message_id, on_progress=on_progress)
+        if not result.messages:
+            await _status_message(
+                link_message, f"已扫描 {result.scanned} 条评论，没有找到可下载的图片或视频。", notice
+            )
+            return
+        await enqueue_messages(
+            result.messages, user, reply_to=link_message,
+            override=folder_name or f"评论_{str(chat).lstrip('@')}_{message_id}",
+            notice=notice, force_batch=True, batch_id=f"comments:{uuid4().hex}",
+        )
+        logging.info(
+            "评论扫描完成 chat=%s post=%s scanned=%d photos=%d videos=%d",
+            chat, message_id, result.scanned, result.photos, result.videos,
+        )
+    except Exception as exc:
+        logging.exception("读取评论区失败 chat=%s post=%s", chat, message_id)
+        await _status_message(
+            link_message,
+            f"评论任务未完成（{type(exc).__name__}）。请确认用户账号能访问原帖及关联讨论组，"
+            "且帖子已开启评论；如有连接超时，请检查代理。详情见运行日志。",
+            notice,
+        )
+    finally:
+        _comment_scans.discard(key)
 
 
 async def addFile(_, message: Message) -> None:

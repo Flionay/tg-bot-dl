@@ -62,7 +62,9 @@ STOP_CANCEL_GRACE = 10.0
 
 
 def register_rename_target(download: Download) -> None:
-    if download.from_message:
+    if (download.from_message and download.progress_message
+            and download.from_message.chat and download.progress_message.chat
+            and download.from_message.chat.id == download.progress_message.chat.id):
         rename_targets[download.from_message.id] = download
     if download.progress_message:
         rename_targets[download.progress_message.id] = download
@@ -157,7 +159,7 @@ def find_download_by_id(download_id: int) -> Download | None:
     for item in list(rename_targets.values()):
         if item.id == download_id:
             return item
-    for item in downloads:
+    for item in list(downloads) + list(active_downloads):
         if item.id == download_id:
             return item
     entry = holds.get(download_id)

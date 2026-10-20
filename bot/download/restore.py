@@ -14,7 +14,7 @@ from pyrogram.types import ReplyParameters
 from bot.app import BASE_FOLDER, app, user
 from bot.download import cleanup, persist as queue_persist
 from bot.download.state import active_batches, queue_download
-from bot.download.types import Batch, BatchItem, Download
+from bot.download.types import Batch, BatchItem, Download, allocate_download_id
 from bot.tg_io import Kind, safe_edit, safe_send
 
 
@@ -187,16 +187,17 @@ async def _restore_task(
 
     batch = rebuilt.get(record.get("batch_id")) if record.get("batch_id") else None
     batch_item = None
+    task_id = allocate_download_id(record.get("task_id"))
     if batch is not None:
         batch.total += 1
         batch_item = BatchItem(
-            download_id=source.id, name=Path(filename).name, status="waiting"
+            download_id=task_id, name=Path(filename).name, status="waiting"
         )
         batch.items.append(batch_item)
 
     download = Download(
         client=client,
-        id=source.id,
+        id=task_id,
         filename=filename,
         from_message=source,
         progress_message=batch.message if batch else None,

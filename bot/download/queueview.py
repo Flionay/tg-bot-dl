@@ -47,7 +47,7 @@ def _download_queue_line(download) -> str:
 
 
 def _batch_queue_line(batch: Batch) -> str:
-    total = len(batch.items) or batch.total
+    total = batch.total if batch.building else (len(batch.items) or batch.total)
     icon = "⏸" if state.paused else ("⬇️" if any(item.status == "downloading" for item in batch.items) else "⏳")
     return f"{icon} 📁 `{clip_button_text(batch.folder, 60)}`（完成 {batch.done}/{total}）"
 

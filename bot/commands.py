@@ -107,6 +107,8 @@ async def keyboardDispatch(app: Client, message: Message):
 def register(app: Client):
     addCommand(app, start, "start")
     addCommand(app, addByLink, "add")
+    addCommand(app, downloadComments, "comments")
+    addCommand(app, downloadRange, "range")
     addCommand(app, showQueue, "queue")
     addCommand(app, listFiles, "files")
     addCommand(app, listener.listen, "listen")
@@ -176,6 +178,8 @@ async def set_menu(app: Client):
         [
             BotCommand("start", "开始使用"),
             BotCommand("add", "通过链接下载文件"),
+            BotCommand("comments", "下载帖子评论区的图片和视频"),
+            BotCommand("range", "按起止消息链接批量下载"),
             BotCommand("queue", "查看下载队列"),
             BotCommand("files", "管理已下载文件"),
             BotCommand("listen", "监听频道自动下载"),
@@ -236,6 +240,42 @@ async def addByLink(_, message: Message):
         return
 
     await download_handler.addFromLink(message, *parsed)
+
+
+async def downloadComments(_, message: Message):
+    """下载已有评论的图片视频：/comments <帖子链接> [文件夹名]"""
+    if not user:
+        await safe_reply(message, "请先在面板配置手机号并完成用户账号登录，才能读取评论区。")
+        return
+    parts = (message.text or "").split(maxsplit=2)
+    if len(parts) < 2:
+        await safe_reply(message, "用法：/comments <频道帖子链接> [文件夹名]")
+        return
+    parsed = parse_message_link(parts[1])
+    if not parsed:
+        await safe_reply(message, LINK_HELP, parse_mode=ParseMode.MARKDOWN)
+        return
+    await download_handler.addCommentsFromLink(
+        message, *parsed, folder_name=parts[2] if len(parts) > 2 else None
+    )
+
+
+async def downloadRange(_, message: Message):
+    """下载编号范围内的媒体：/range <起始链接> <结束链接> [文件夹名]"""
+    if not user:
+        await safe_reply(message, "请先在面板配置手机号并完成用户账号登录，才能按链接批量下载。")
+        return
+    parts = (message.text or "").split(maxsplit=3)
+    if len(parts) < 3:
+        await safe_reply(message, "用法：/range <起始消息链接> <结束消息链接> [文件夹名]，包含两端消息。")
+        return
+    start, end = parse_message_link(parts[1]), parse_message_link(parts[2])
+    if not start or not end:
+        await safe_reply(message, LINK_HELP, parse_mode=ParseMode.MARKDOWN)
+        return
+    await download_handler.addRangeFromLinks(
+        message, start, end, folder_name=parts[3] if len(parts) > 3 else None
+    )
 
 
 async def usage(_, message: Message):

@@ -28,7 +28,7 @@ async def refresh_batch(batch: Batch, force: bool = False) -> None:
     if not force and batch.last_update and now - batch.last_update < MIN_EDIT_INTERVAL:
         return
     batch.last_update = now
-    active = batch.finished < (len(batch.items) or batch.total) and not batch.stopped
+    active = (batch.building or batch.finished < (len(batch.items) or batch.total)) and not batch.stopped
     await safe_edit(
         batch.message,
         render_batch(batch),
@@ -42,7 +42,7 @@ async def finish_batch_item(batch: Batch) -> None:
     if batch.stopped:
         return
     await refresh_batch(batch, force=True)
-    if batch.finished < (len(batch.items) or batch.total):
+    if batch.building or batch.finished < (len(batch.items) or batch.total):
         return
 
     directory = Path(batch.directory) if batch.directory else None

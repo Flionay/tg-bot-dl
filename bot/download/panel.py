@@ -60,7 +60,7 @@ def _file_item(download: Download, phase: str, hold_reason: str | None = None) -
 
 
 def _batch_item(batch: Batch) -> dict:
-    count = len(batch.items) or batch.total
+    count = batch.total if batch.building else (len(batch.items) or batch.total)
     downloading = [item for item in batch.items if item.status == "downloading"]
     paused = bool(state.paused)
     progress_items = downloading
@@ -97,6 +97,7 @@ def _batch_item(batch: Batch) -> dict:
         "batch_id": batch.id,
         "done": batch.done,
         "count": count,
+        "building": batch.building,
     }
 
 

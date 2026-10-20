@@ -46,7 +46,7 @@ def batch_keyboard(batch: Batch) -> InlineKeyboardMarkup | None:
                 InlineKeyboardButton("仍要下载", callback_data=f"bdupc {batch.id}"),
             ]
         )
-    has_downloads = any(item.status in {"waiting", "downloading", "cold"} for item in batch.items)
+    has_downloads = batch.building or any(item.status in {"waiting", "downloading", "cold"} for item in batch.items)
     if has_downloads and not batch.stopped:
         rows.append([InlineKeyboardButton("停止全部", callback_data=f"stopb {batch.id}")])
     if not rows:
@@ -107,8 +107,8 @@ def render_item(item: BatchItem) -> str:
 
 
 def render_batch(batch: Batch) -> str:
-    total = len(batch.items) or batch.total
-    if batch.finished >= total:
+    total = batch.total if batch.building else (len(batch.items) or batch.total)
+    if not batch.building and batch.finished >= total:
         parts = [f"完成 {batch.done}/{total}"]
         if batch.skipped:
             parts.append(f"跳过 {batch.skipped}")
@@ -122,8 +122,26 @@ def render_batch(batch: Batch) -> str:
         status = f"进度 {batch.done}/{total}"
         if batch.skipped:
             status += f"，跳过 {batch.skipped}"
-    body = "\n".join(render_item(item) for item in batch.items)
-    return f"文件夹 `{batch.folder}`\n{status}\n\n{body}"
+    if batch.building:
+        status += "，正在加入队列"
+    header = f"文件夹 `{batch.folder}`\n{status}\n\n"
+    # Telegram limits messages to 4096 UTF-16 code units. Keep room for the
+    # header and omission notice; show live files first for large batches.
+    items = batch.items
+    if len(items) > 20:
+        items = sorted(items, key=lambda item: item.status != "downloading")
+    lines = []
+    units = len(header.encode("utf-16-le")) // 2
+    for item in items:
+        line = render_item(item)
+        length = len(line.encode("utf-16-le")) // 2 + 1
+        if units + length > 3500:
+            break
+        lines.append(line)
+        units += length
+    if len(lines) < len(items):
+        lines.append(f"…另有 {len(items) - len(lines)} 个文件（以上为部分明细）")
+    return header + "\n".join(lines)
 
 
 def success_text_for(download, actual_size: int, time_took: str, speed: str) -> str:

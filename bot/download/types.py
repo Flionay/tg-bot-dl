@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -8,6 +9,17 @@ from pyrogram.client import Client
 from pyrogram.types import Message
 
 from bot.download.speed import SpeedMeter
+
+_allocated_ids: set[int] = set()
+
+
+def allocate_download_id(preferred: int | None = None) -> int:
+    """Task IDs are independent of per-chat message IDs and safe in JS JSON."""
+    identifier = preferred
+    while not isinstance(identifier, int) or not 0 < identifier < 2**53 or identifier in _allocated_ids:
+        identifier = secrets.randbelow(2**52 - 1) + 1
+    _allocated_ids.add(identifier)
+    return identifier
 
 class Status(StrEnum):
     """批次条目/下载任务的状态字。StrEnum：与裸字符串比较/入集合都兼容。"""
@@ -88,6 +100,7 @@ class Batch:
     quiet: bool = False
     items: list[BatchItem] = field(default_factory=list)
     pending_unique: list[Download] = field(default_factory=list)
+    building: bool = False
 
     def item_for(self, download_id: int) -> BatchItem | None:
         for item in self.items:

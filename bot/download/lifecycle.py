@@ -324,7 +324,7 @@ async def refetch_source_message(download: Download):
     if chat is None:
         return download.from_message
     try:
-        fetched = await download.client.get_messages(chat.id, [download.id])
+        fetched = await download.client.get_messages(chat.id, [download.from_message.id])
     except Exception:
         logging.warning("刷新源消息失败，沿用原引用：%s", download.filename, exc_info=True)
         return download.from_message
